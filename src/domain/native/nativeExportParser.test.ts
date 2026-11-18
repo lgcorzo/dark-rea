@@ -709,6 +709,92 @@ describe("ELF dynamic symbol exports", () => {
       exports: [{ name: "be_fn", value: "0x10000", size: "8" }],
     });
   });
+
+  it("keeps the ppc64 reader name for EM_PPC64", () => {
+    const result = parse(
+      elfExportImage({
+        bits: 64,
+        little: true,
+        machine: 21,
+        symbols: [{ name: "le_fn", value: 0x10000n, size: 8n }],
+      }),
+    );
+
+    expect(result).toMatchObject({
+      bits: 64,
+      byte_order: "little",
+      architecture: "ppc64",
+      exports: [{ name: "le_fn", value: "0x10000", size: "8" }],
+    });
+  });
+});
+
+describe("ELF version index 0 unversioned exports", () => {
+  it("retains defined global and weak symbols with GNU version index 0 as unversioned exports", () => {
+    const bytes = elfExportImage({
+      symbols: [
+        { name: "global_symbol", version: 0 },
+        { name: "weak_symbol", binding: 2, version: 0 },
+        { name: "plain_symbol", version: 1 },
+        { name: "hidden_symbol", visibility: 2, version: 0 },
+        { name: "undefined_symbol", section: 0, version: 0 },
+        { name: "local_symbol", binding: 0, version: 0 },
+      ],
+    });
+    const result = parse(bytes);
+    expect(result).toMatchObject({
+      format: "elf",
+      coverage: { status: "complete", examined_entries: 6, exports: 3 },
+      issues: [],
+    });
+    expect(
+      result.format === "elf" &&
+        result.exports.map(({ name, binding, version }) => ({
+          name,
+          binding,
+          version,
+        })),
+    ).toEqual([
+      { name: "global_symbol", binding: "global", version: null },
+      { name: "weak_symbol", binding: "weak", version: null },
+      { name: "plain_symbol", binding: "global", version: null },
+    ]);
+  });
+});
+
+describe("ELF export evidence without visibility", () => {
+  it("refuses an ELF export row without visibility", () => {
+    const withoutVisibility = {
+      artifact,
+      format: "elf" as const,
+      architecture: "amd64",
+      bits: 64 as const,
+      byte_order: "little" as const,
+      exports: [
+        {
+          name: "legacy_fn",
+          name_bytes_base64: null,
+          name_utf8_decodable: true,
+          value: "0x1000",
+          size: "16",
+          type: "function" as const,
+          binding: "global" as const,
+          version: null,
+        },
+      ],
+      coverage: {
+        status: "complete" as const,
+        reason: null,
+        examined_entries: 1,
+        exports: 1,
+      },
+      issues: [],
+      limitations: [],
+    };
+    const parsed =
+      nativeExportContracts.nativeExportsSchema.safeParse(withoutVisibility);
+    expect(parsed.error?.issues[0]?.path).toEqual(["exports", 0, "visibility"]);
+  });
 });
 
 describe("ELF version index 0 unversioned exports", () => {
