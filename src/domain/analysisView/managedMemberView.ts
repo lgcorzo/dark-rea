@@ -1,22 +1,28 @@
 import { analysisViewInputError } from "./analysisViewErrors.js";
-import type { AnalysisError } from "../analysisErrorBase.js";
 import { uniqueSorted } from "../canonicalOrdering.js";
 import {
   managedMemberInspectionSchema,
   type ManagedMemberInspection,
 } from "../managed/managedArtifact.js";
-import { err, ok, type Result } from "../result.js";
-import type {
-  AnalysisViewParent,
-  AnalysisViewRequest,
-  UnsignedAnalysisView,
-} from "./analysisView.js";
+import { err, ok } from "../result.js";
+import type { AnalysisViewParent } from "./analysisViewParent.js";
+import {
+  assertOwnedView,
+  type AdmittedView,
+  type SummaryAnalysisView,
+} from "./analysisViewShape.js";
 import {
   completeWithinViewCoverage,
   pageViewCoverage,
 } from "./analysisViewCoverage.js";
+import { z } from "zod";
+import { managedMembersViewRequestSchema } from "./managedMemberViewSchemas.js";
 import { managedViewIdentityUnknowns } from "./managedArtifactView.js";
-import { createAnalysisViewResultReader } from "./analysisViewParent.js";
+import {
+  createAnalysisViewResultReader,
+  validateAnalysisViewSubject,
+} from "./analysisViewParent.js";
+import { validateManagedTokenScope } from "../managed/managedInspectionEvidence.js";
 
 import type {
   ManagedMembersViewRequest,
@@ -275,8 +281,8 @@ const summarizeMembers = (
 /** Project authenticated member Evidence without reading a path or invoking a provider. */
 export const projectManagedMemberView = (
   parent: AnalysisViewParent,
-  view: AnalysisViewRequest,
-): Result<UnsignedAnalysisView, AnalysisError> => {
+  view: AdmittedView,
+) => {
   if (view.kind !== "summary" && view.kind !== "managed-members")
     return err(
       analysisViewInputError([
@@ -288,9 +294,24 @@ export const projectManagedMemberView = (
         },
       ]),
     );
+  assertOwnedView<
+    SummaryAnalysisView | z.output<typeof managedMembersViewRequestSchema>
+  >(view, "summary", "managed-members");
   const parsed = parseMemberReport(parent);
   if (!parsed.ok) return parsed;
   const report = parsed.value;
+  // Match the public view boundary's subject check before scope validation.
+  const identity = validateAnalysisViewSubject(
+    parent.subject,
+    report.artifact.sha256,
+  );
+  if (!identity.ok) return identity;
+  const scope = validateManagedTokenScope(
+    report,
+    parent.operation,
+    parent.evidenceId,
+  );
+  if (!scope.ok) return scope;
   const shared = {
     parent_evidence_id: parent.evidenceId,
     parent_operation: "inspect_managed_members" as const,
@@ -317,11 +338,11 @@ export const projectManagedMemberView = (
       0,
     );
     return ok({
-      kind: "summary",
+      kind: "summary" as const,
       view,
       ...shared,
       summary,
-      coverage: completeWithinViewCoverage(total, total),
+      coverage: completeWithinViewCoverage(total),
     });
   }
   const selected = collectionPage(report, view);
@@ -345,7 +366,7 @@ export const projectManagedMemberView = (
       `${page.unresolved_filter_rows} source rows have unknown requested names or declaring types and may match the filters; the matched total excludes them.`,
     );
   return ok({
-    kind: "managed-members",
+    kind: "managed-members" as const,
     view,
     page,
     ...shared,
