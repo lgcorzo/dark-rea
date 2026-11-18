@@ -1,4 +1,7 @@
-import { modelTypeRowSchema } from "../model/modelArtifactQuery.js";
+import {
+  modelArtifactViewRequestSchema,
+  modelTypeRowSchema,
+} from "../model/modelArtifactQuery.js";
 import { z } from "zod";
 import {
   modelArtifactSchema,
@@ -14,16 +17,18 @@ import { createAnalysisViewResultReader } from "./analysisViewParent.js";
 import { isImmutableJsonSnapshot } from "../immutableJson.js";
 import type { JsonValue } from "../jsonValue.js";
 import { err, ok, type Result } from "../result.js";
-import type {
-  AnalysisViewParent,
-  AnalysisViewRequest,
-  UnsignedAnalysisView,
-} from "./analysisView.js";
+import type { AnalysisViewParent } from "./analysisViewParent.js";
+import {
+  assertOwnedView,
+  type AdmittedView,
+  type SummaryAnalysisView,
+} from "./analysisViewShape.js";
 import {
   completeWithinViewCoverage,
   boundedViewMessages,
   pageViewCoverage,
 } from "./analysisViewCoverage.js";
+import { evidenceFileTarget } from "../evidence.js";
 
 const HEADLINE_TEXT_LIMIT = 512;
 
@@ -142,8 +147,8 @@ const read = (parent: AnalysisViewParent): Result<Checked, AnalysisError> => {
   const report = parsed.value;
   const reusable = isImmutableJsonSnapshot(report);
   const cached = reusable ? checked.get(report) : undefined;
-  const subject = parent.subject;
-  if (subject != null && subject.digest.sha256 !== report.artifact.sha256)
+  const subject = evidenceFileTarget(parent);
+  if (subject != null && subject.sha256 !== report.artifact.sha256)
     return err(
       analysisViewInputError([
         {
@@ -180,8 +185,8 @@ const read = (parent: AnalysisViewParent): Result<Checked, AnalysisError> => {
 /** Historical pages never reopen weights or report a scoped header digest as full-file identity. */
 export const projectModelArtifactView = (
   parent: AnalysisViewParent,
-  view: AnalysisViewRequest,
-): Result<UnsignedAnalysisView, AnalysisError> => {
+  view: AdmittedView,
+) => {
   if (view.kind !== "summary" && view.kind !== "model-artifact")
     return err(
       analysisViewInputError([
@@ -193,6 +198,9 @@ export const projectModelArtifactView = (
         },
       ]),
     );
+  assertOwnedView<
+    SummaryAnalysisView | z.output<typeof modelArtifactViewRequestSchema>
+  >(view, "summary", "model-artifact");
   const parsed = read(parent);
   if (!parsed.ok) return parsed;
   const {
@@ -210,7 +218,7 @@ export const projectModelArtifactView = (
     parent_digest: parent.evidenceId.slice(3),
     artifact: { path: report.artifact.path, sha256: report.artifact.sha256 },
     limitations: boundedViewMessages(
-      parent.limitations,
+      [...parent.limitations, ...report.limitations],
       parent.evidenceId,
       "limitations",
     ),
@@ -225,7 +233,7 @@ export const projectModelArtifactView = (
   };
   if (view.kind === "summary")
     return ok({
-      kind: "summary",
+      kind: "summary" as const,
       view,
       ...shared,
       summary: {
@@ -236,7 +244,7 @@ export const projectModelArtifactView = (
           "limitations",
         ),
       },
-      coverage: completeWithinViewCoverage(1, 1),
+      coverage: completeWithinViewCoverage(1),
     });
   const rows =
     view.collection === "tensors"
@@ -318,7 +326,7 @@ export const projectModelArtifactView = (
     return result;
   });
   return ok({
-    kind: "model-artifact",
+    kind: "model-artifact" as const,
     view,
     ...shared,
     source: report.artifact,

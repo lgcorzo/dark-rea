@@ -10,6 +10,7 @@ import { connectLocalToolsMcp } from "../../fixtures/localToolsMcp.js";
 import { parseMcpToolError } from "../../fixtures/mcpToolError.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
+import { issuesByContractField } from "../../support/cli/cliIssueFields.js";
 
 cliTest(
   "omits HAR extension payloads from capture previews while retaining complete records",
@@ -87,10 +88,16 @@ cliTest(
           ],
         });
       } else {
-        expect(JSON.stringify(result)).toContain(marker);
         expect(result).toMatchObject({
           items: [
-            {},
+            {
+              reported: {
+                name: { payload: marker },
+                type: { body: marker },
+                request: { reason: { payload: marker } },
+                response: { method: { payload: marker } },
+              },
+            },
             {
               reported: {
                 name: scalarMarker,
@@ -150,7 +157,7 @@ cliTest(
       const text = JSON.stringify({ log });
       const path = join(root, `${label}.har`);
       await writeFile(path, text);
-      const output = await cli.run({
+      const invocation = {
         arguments: [
           "inspect-web-network-capture",
           path,
@@ -159,6 +166,10 @@ cliTest(
           "0",
           "--json",
         ],
+      };
+      const output = await cli.run({
+        ...invocation,
+        freshProcess: label === "null-timings",
       });
       expect(output.exitCode).toBe(1);
       const expected = {
@@ -172,7 +183,10 @@ cliTest(
           ],
         },
       };
-      expect(output.json).toMatchObject(expected);
+      // The CLI names the capture by its argument, otherwise as MCP does.
+      expect(
+        issuesByContractField(output.json, { capturePath: "capture_path" }),
+      ).toMatchObject(expected);
       expect(output.json).not.toHaveProperty("evidence_id");
       const reply = await call("inspect_web_network_capture", {
         capture_path: path,

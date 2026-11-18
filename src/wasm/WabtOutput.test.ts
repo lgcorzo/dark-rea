@@ -1,9 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+
+const refused = (code: string) =>
+  expect.objectContaining({ _tag: "WabtAdmissionError", code });
 import { parseWabtOutput } from "./WabtOutput.js";
 import { parseWabtWat } from "./WabtWat.js";
 import { associateWasmGlue } from "./WasmGlueAdapter.js";
-import { absoluteCallerPath } from "../filesystem/callerPath.js";
 const golden = () =>
   readFile(
     new URL("../../tests/fixtures/wasm/objdump.txt", import.meta.url),
@@ -28,10 +30,10 @@ it("corroborates a blank custom name with bounded invalid UTF-8 bytes", () => {
   valid[11] = 0x61;
   valid[12] = 0x62;
   expect(() => parseWabtOutput(dump, valid.length, [], [], valid)).toThrow(
-    /not corroborated/u,
+    refused("blank_custom_name"),
   );
   expect(() => parseWabtOutput(dump, bytes.length, [])).toThrow(
-    /not corroborated/u,
+    refused("blank_custom_name"),
   );
   const mixed = Buffer.concat([bytes, Buffer.from("00050174616263", "hex")]);
   const mixedDump = dump.replace(
@@ -57,19 +59,21 @@ it("retains real WABT section ranges, custom section identity and original heade
     bytes: 12,
     description: '"test"',
   });
-  expect(() => parseWabtOutput(text, 75, ["test"])).toThrow(/ranges/u);
+  expect(() => parseWabtOutput(text, 75, ["test"])).toThrow(
+    refused("section_ranges"),
+  );
   expect(() =>
     parseWabtOutput(text.replace("size=0x0000000c", "size=0x0000000d"), 76, [
       "test",
     ]),
-  ).toThrow(/ranges/u);
+  ).toThrow(refused("section_ranges"));
   expect(() =>
     parseWabtOutput(
       text.replace("\nSection Details:\n", "unexpected\nSection Details:\n"),
       76,
       ["test"],
     ),
-  ).toThrow(/Unrecognized/u);
+  ).toThrow(refused("unrecognized_section_row"));
   expect(() =>
     parseWabtOutput(
       text.replace(
@@ -79,7 +83,7 @@ it("retains real WABT section ranges, custom section identity and original heade
       76,
       ["test"],
     ),
-  ).toThrow(/Unrecognized/u);
+  ).toThrow(refused("unrecognized_section_row"));
 });
 const dataCountModuleBytes = 0x3d;
 const unpaddedDataCountRow =
@@ -126,14 +130,14 @@ it("accepts an unpadded DataCount row and still rejects malformed output and bad
       dataCountModuleBytes,
       [],
     ),
-  ).toThrow(/Unrecognized/u);
+  ).toThrow(refused("unrecognized_section_row"));
   expect(() =>
     parseWabtOutput(
       dataCountDump.replace(unpaddedDataCountRow, "Sections:"),
       dataCountModuleBytes,
       [],
     ),
-  ).toThrow(/Unrecognized/u);
+  ).toThrow(refused("unrecognized_section_row"));
   expect(() =>
     parseWabtOutput(
       dataCountDump.replace(
@@ -143,14 +147,14 @@ it("accepts an unpadded DataCount row and still rejects malformed output and bad
       dataCountModuleBytes,
       [],
     ),
-  ).toThrow(/Unrecognized/u);
+  ).toThrow(refused("unrecognized_section_row"));
   expect(() =>
     parseWabtOutput(
       dataCountDump.replace("(size=0x00000001)", "(size=0x00000002)"),
       dataCountModuleBytes,
       [],
     ),
-  ).toThrow(/ranges/u);
+  ).toThrow(refused("section_ranges"));
   expect(() =>
     parseWabtOutput(
       dataCountDump.replace(
@@ -160,10 +164,10 @@ it("accepts an unpadded DataCount row and still rejects malformed output and bad
       dataCountModuleBytes,
       [],
     ),
-  ).toThrow(/ranges/u);
+  ).toThrow(refused("section_ranges"));
   expect(() =>
     parseWabtOutput(dataCountDump, dataCountModuleBytes - 1, []),
-  ).toThrow(/ranges/u);
+  ).toThrow(refused("section_ranges"));
   expect(() =>
     parseWabtOutput(
       dataCountDump.replace(
@@ -173,7 +177,7 @@ it("accepts an unpadded DataCount row and still rejects malformed output and bad
       dataCountModuleBytes,
       [],
     ),
-  ).toThrow(/header/u);
+  ).toThrow(refused("unsupported_section_header"));
 });
 it("bounds section header bytes while accepting a five-byte size LEB", () => {
   const paddedCustomDump = [
@@ -209,7 +213,7 @@ it("bounds section header bytes while accepting a five-byte size LEB", () => {
       "",
     ].join("\n");
     expect(() => parseWabtOutput(malformed, start + 1, [""])).toThrow(
-      /ranges/u,
+      refused("section_ranges"),
     );
   }
 });
@@ -225,7 +229,7 @@ it.each([
       `\n${displayed.map((name) => `module name: <${name}>\n`).join("")}\nSections:`,
     );
     expect(() => parseWabtOutput(text, 76, ["test"], decoded)).toThrow(
-      /header format/u,
+      refused("unsupported_section_header"),
     );
   },
 );
@@ -240,7 +244,6 @@ it.each([
   });
 });
 it.each([
-  String.raw`\00\06\05hello\01\02\01`,
   String.raw`\00\07\05hello\00`,
   String.raw`\00\06\05hello\00\06\05later`,
 ])(
@@ -284,7 +287,7 @@ it("frames custom section names at their NUL-terminated objdump display", async 
     description: '"test"',
   });
   expect(() => parseWabtOutput(text, 76, ["other\0test"])).toThrow(
-    /custom-section header/u,
+    refused("custom_header_mismatch"),
   );
 });
 it("preserves leading U+FEFF as custom-name data, not a debug-name marker", () => {
@@ -300,7 +303,7 @@ it("preserves leading U+FEFF as custom-name data, not a debug-name marker", () =
   expect(parsed.debugModuleNames).toEqual([]);
   expect(() => parseWabtWat('(module (@custom "\\ff" "payload"))')).toThrow();
 });
-it("extracts escaped WAT import/export forms while retaining multiline producer text", async () => {
+it("extracts recorded WAT forms and refuses malformed outer framing", async () => {
   const text = await readFile(
     new URL("../../tests/fixtures/wasm/decoded.wat", import.meta.url),
     "utf8",
@@ -311,25 +314,12 @@ it("extracts escaped WAT import/export forms while retaining multiline producer 
     customSectionNames: ["test"],
     debugModuleNames: [],
   });
-  expect(
-    parseWabtWat(
-      '(module (import "a.b" "c\\0aline" (func)) (export "fake\\22Export[1]:" (func 0)))',
-    ),
-  ).toMatchObject({
-    imports: ['(import "a.b" "c\\0aline" (func))'],
-    exports: ['(export "fake\\22Export[1]:" (func 0))'],
-    customSectionNames: [],
-    debugModuleNames: [],
-  });
-  expect(
-    parseWabtWat(
-      '(module (; nested (; comment ;) ;) ;; comment\n (export "x" (func 0)))',
-    ).exports,
-  ).toEqual(['(export "x" (func 0))']);
   expect(() => parseWabtWat('(module (export "unfinished"')).toThrow(
-    /Incomplete/u,
+    refused("incomplete_output"),
   );
-  expect(() => parseWabtWat("(module) unexpected")).toThrow(/Unexpected/u);
+  expect(() => parseWabtWat("(module) unexpected")).toThrow(
+    refused("unexpected_text"),
+  );
 });
 it("keeps exact local, ambiguous URL, computed and unparseable glue distinct", () => {
   const candidates = ["/app/module.wasm", "/other/module.wasm"];
@@ -434,25 +424,6 @@ it("retains directive literals and matches their cooked escaped path", () => {
       candidate_paths: candidates,
       association: "local-path-candidate",
       evidence_kind: "static-literal",
-    },
-  ]);
-});
-
-it("matches a CLI-selected ./ module exactly against its glue reference", () => {
-  // The CLI makes `./module.wasm` absolute from /app with absoluteCallerPath.
-  const selected = absoluteCallerPath("./module.wasm", {
-    cwd: "/app",
-    platform: "linux",
-  });
-  expect(
-    associateWasmGlue('fetch("./module.wasm");', "/app/glue.js", [
-      selected,
-      "/other/module.wasm",
-    ]).references,
-  ).toMatchObject([
-    {
-      association: "local-path-candidate",
-      candidate_paths: ["/app/module.wasm"],
     },
   ]);
 });

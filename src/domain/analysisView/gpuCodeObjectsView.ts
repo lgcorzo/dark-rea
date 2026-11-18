@@ -12,11 +12,12 @@ import {
   type GpuCodeObjects,
 } from "../gpu/gpuCodeObjects.js";
 import type { AnalysisError } from "../analysisErrorBase.js";
-import type {
-  AnalysisViewParent,
-  AnalysisViewRequest,
-  UnsignedAnalysisView,
-} from "./analysisView.js";
+import type { AnalysisViewParent } from "./analysisViewParent.js";
+import {
+  ownedView,
+  type AdmittedView,
+  type SummaryAnalysisView,
+} from "./analysisViewShape.js";
 import {
   ANALYSIS_VIEW_PAGE_BUDGET_RECOVERY,
   analysisViewInputError,
@@ -31,6 +32,7 @@ import { err, ok, type Result } from "../result.js";
 import type { JsonValue } from "../jsonValue.js";
 import { jsonValueByteLength } from "../jsonValueByteLength.js";
 import { AnalysisResourceConstraintError } from "../analysisErrorCore.js";
+import { evidenceFileTarget } from "../evidence.js";
 export const gpuCodeObjectsViewRequestSchema = z.discriminatedUnion(
   "collection",
   [
@@ -61,24 +63,16 @@ export const gpuCodeObjectsSummarySchema = gpuCodeObjectsObjectSchema
   });
 export const gpuCodeObjectsItemsSchema = z.union([
   z.array(
-    gpuObjectSchema
-      .partial()
-      .required({
-        id: true,
-        kind: true,
-        target: true,
-        location: true,
-        metadata_location: true,
-        payload_target: true,
-        target_consistency: true,
-        inspection: true,
-      })
-      .extend({
-        // Source defaults qualify historical full rows, never omitted page columns.
-        amd_target_metadata: gpuObjectSchema.shape.amd_target_metadata
-          .removeDefault()
-          .optional(),
-      }),
+    gpuObjectSchema.partial().required({
+      id: true,
+      kind: true,
+      target: true,
+      location: true,
+      metadata_location: true,
+      payload_target: true,
+      target_consistency: true,
+      inspection: true,
+    }),
   ),
   z.array(
     gpuKernelSchema.partial().required({
@@ -204,11 +198,8 @@ const readGpuFacts = (
     };
     if (reusable) checkedGpu.set(report, checked);
   }
-  const subject = parent.subject;
-  if (
-    subject != null &&
-    subject.digest.sha256 !== checked.report.artifact.sha256
-  )
+  const subject = evidenceFileTarget(parent);
+  if (subject != null && subject.sha256 !== checked.report.artifact.sha256)
     return err(
       analysisViewInputError([
         {
@@ -222,9 +213,12 @@ const readGpuFacts = (
 };
 export const projectGpuCodeObjectsView = (
   parent: AnalysisViewParent,
-  view: AnalysisViewRequest,
-): Result<UnsignedAnalysisView, AnalysisError> => {
-  if (view.kind !== "summary" && view.kind !== "gpu-code-objects")
+  admitted: AdmittedView,
+) => {
+  const view = ownedView<
+    SummaryAnalysisView | z.output<typeof gpuCodeObjectsViewRequestSchema>
+  >(admitted, "summary", "gpu-code-objects");
+  if (view === undefined)
     return err(
       analysisViewInputError([
         {
@@ -258,14 +252,11 @@ export const projectGpuCodeObjectsView = (
   };
   if (view.kind === "summary") {
     return ok({
-      kind: "summary",
+      kind: "summary" as const,
       view,
       ...shared,
       summary: { ...summary, limitations: shared.limitations },
-      coverage: completeWithinViewCoverage(
-        report.objects.length,
-        report.objects.length,
-      ),
+      coverage: completeWithinViewCoverage(report.objects.length),
     });
   }
   if (view.collection === "ptx") {
@@ -312,7 +303,7 @@ export const projectGpuCodeObjectsView = (
         ),
       );
     return ok({
-      kind: "gpu-code-objects",
+      kind: "gpu-code-objects" as const,
       view,
       ...shared,
       source_coverage: report.coverage,
@@ -324,7 +315,7 @@ export const projectGpuCodeObjectsView = (
         byte_length: artifact.byte_length,
         text,
         offset: view.offset,
-        offset_unit: "utf16-code-unit",
+        offset_unit: "utf16-code-unit" as const,
       },
       coverage: pageViewCoverage(
         view.offset,
@@ -419,7 +410,7 @@ export const projectGpuCodeObjectsView = (
       ),
     );
   return ok({
-    kind: "gpu-code-objects",
+    kind: "gpu-code-objects" as const,
     view,
     ...shared,
     source_coverage: report.coverage,
